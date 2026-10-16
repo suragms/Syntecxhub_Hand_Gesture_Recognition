@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("GLOG_minloglevel", "2")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:

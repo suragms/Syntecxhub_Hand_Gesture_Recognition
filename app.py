@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import os
 import tkinter as tk
+import warnings
+
+os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+os.environ.setdefault("GLOG_minloglevel", "2")
+warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
 
 from config import AppConfig, CameraConfig, DEFAULT_CONFIG
 from ui.main_window import MainWindow

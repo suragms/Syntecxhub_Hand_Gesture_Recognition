@@ -32,6 +32,11 @@ class HandDetector:
         """Initialize MediaPipe once for the full camera session."""
         if self._hands is not None:
             return
+        import os
+        import warnings
+        os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
+        os.environ.setdefault("GLOG_minloglevel", "2")
+        warnings.filterwarnings("ignore", category=UserWarning, module="google.protobuf")
         try:
             import mediapipe as mp
         except ImportError as error:  # pragma: no cover - dependency environment
