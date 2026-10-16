@@ -1,0 +1,19 @@
+# Tested baseline: 64-bit Python 3.11 on Windows 10/11.
+# Install core application and test dependencies with:
+#   python -m pip install -r requirements.txt
+# Use exactly one OpenCV distribution in an environment. Do not add contrib/headless wheels.
+# MediaPipe 0.10.30 retains the synchronous Hands API used by this release.
+mediapipe==0.10.30
+# MediaPipe resolves its own compatible OpenCV/NumPy wheels; the constraints
+# below retain the preferred Python 3.11 baseline for a clean environment.
+numpy==1.26.4; python_version < "3.12"
+opencv-python==4.10.0.84; python_version < "3.12"
+Pillow==10.4.0
+pytest==8.3.5
+pytest-cov==6.0.0
+
+# Optional, live Windows action integrations are deliberately not installed by
+# default. After reviewing docs/USER_GUIDE.md, install only what is needed:
+# pyautogui==0.9.54
+# pycaw==20240210
+# comtypes==1.4.7
