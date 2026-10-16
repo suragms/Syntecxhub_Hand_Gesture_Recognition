@@ -128,6 +128,11 @@ class ActionManager:
         """Clear cooldown state and allow the next mapped action."""
 
         self._last_action_at.clear()
+        self.rearm()
+
+    def rearm(self) -> None:
+        """Restore gesture eligibility without bypassing action cooldowns."""
+
         self._armed = True
         self._neutral_observed_at = None
 

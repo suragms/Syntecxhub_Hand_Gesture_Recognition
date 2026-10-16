@@ -35,10 +35,10 @@ flowchart LR
 3. `HandDetector` converts the current BGR frame to RGB for MediaPipe once and adapts each 21-point result to a dependency-free `HandObservation`.
 4. `LandmarkProcessor` checks shape/finite coordinates, derives robust palm scale, and creates normalized points.
 5. `GestureClassifier` calculates joint-angle, extension, compactness, and orientation evidence. It conservatively returns a mandatory gesture or `UNKNOWN`.
-6. `GestureController` assigns short-lived wrist/handedness tracks, updates time-based smoothing, and expires stale tracks.
-7. `ActionManager` selects a stable primary hand, enforces disabled mode, neutral rearming, and cooldown before delegating to a registry.
-8. `Visualizer` annotates the same fresh frame with landmarks, connections, bounding boxes, status, and measured FPS.
-9. The standalone demo displays the image with OpenCV; the GUI transfers latest results through a bounded queue and updates Tk only from its event loop.
+6. `GestureController` assigns short-lived wrist/handedness tracks, updates time-based smoothing, and expires stale tracks by elapsed wall-clock time.
+7. `ActionManager` selects a stable primary hand, enforces disabled mode, independent action cooldowns, and neutral/absence rearming before delegating to a registry.
+8. `Visualizer` annotates the same fresh frame with landmarks, connections, bounding boxes, status, and capture-to-annotated-frame engine-pipeline FPS.
+9. The standalone demo displays the image with OpenCV; the GUI gives each worker a local engine and run ID, transfers only the latest frame through a bounded queue, and delivers lifecycle/control events through a reliable queue to Tk's event loop.
 
 ## Module boundaries
 
@@ -62,11 +62,11 @@ flowchart LR
 - **Thumbs Up:** thumb is extended and directed upward in image coordinates while other fingers are folded.
 - **Unknown:** a valid detected hand that is ambiguous, partial, highly rotated, or below a threshold. It has no action mapping.
 
-The classifier returns heuristic evidence, not a calibrated probability. No trained gesture model is claimed.
+The classifier returns heuristic evidence, not a calibrated probability. `minimum_confidence` is a geometric-evidence acceptance gate: candidates below it become `UNKNOWN`. No trained gesture model is claimed. Legacy MediaPipe Hands gives a **handedness-label** score, not a landmark-quality score; the adapter preserves it as metadata and never uses it to lower gesture confidence.
 
 ### Temporal stability
 
-`GestureSmoother` uses timestamps, a trailing window, exponential time decay, evidence weights, and a consensus threshold. It does not assume a fixed camera FPS. `GestureController` keeps tracking and action decisions separate: a raw gesture may appear in the UI before it becomes stable.
+`GestureSmoother` uses timestamps, a trailing window, exponential time decay, evidence weights, consensus, and an elapsed winning-gesture hold threshold. It does not assume a fixed camera FPS. `GestureController` uses the configured elapsed no-hand interval to discard a stale track and its history before association, so a returned hand starts with new stability evidence. A raw gesture may therefore appear in the UI before it becomes stable.
 
 ### Multiple hands
 
@@ -82,4 +82,4 @@ The detector returns up to two hands. Both receive independent classification an
 - MediaPipe unavailable/incompatible: a descriptive detector error explains the supported environment.
 - Optional action APIs unavailable: a visible `ActionResult` failure; detector/preview remain independent.
 - Demo loop: `finally` closes detector/camera and calls `cv2.destroyAllWindows()`.
-- GUI: the worker owns camera/detector resources; the Tk thread uses `after()` and never directly receives worker-side widget calls.
+- GUI: a worker owns each engine/camera/detector instance for its whole run; Tk only signals stop, sends commands through a queue, and ignores stale run-ID messages. Native resources are never closed concurrently from the Tk thread.

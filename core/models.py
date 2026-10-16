@@ -99,6 +99,7 @@ class HandObservation:
     timestamp: float
     handedness: Handedness = Handedness.UNKNOWN
     confidence: float = 1.0
+    handedness_confidence: float | None = None
 
     def __post_init__(self) -> None:
         if len(self.landmarks) != LANDMARK_COUNT:
@@ -107,6 +108,8 @@ class HandObservation:
             raise ValueError("Observation timestamp must be finite.")
         if not 0.0 <= self.confidence <= 1.0:
             raise ValueError("Observation confidence must be in [0, 1].")
+        if self.handedness_confidence is not None and not 0.0 <= self.handedness_confidence <= 1.0:
+            raise ValueError("Handedness confidence must be in [0, 1].")
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +121,7 @@ class ProcessedLandmarks:
     timestamp: float
     handedness: Handedness
     detector_confidence: float
+    handedness_confidence: float | None
     palm_size: float
     palm_center: Point3D
 
@@ -203,7 +207,6 @@ class TrackData:
     handedness: Handedness
     wrist: Point3D
     velocity: Point3D = field(default_factory=lambda: Point3D(0.0, 0.0, 0.0))
-    missed_frames: int = 0
     prediction: Optional[GesturePrediction] = None
     smoothed_gesture: Optional[SmoothedGesture] = None
     history: Deque[TrackSample] = field(default_factory=lambda: deque(maxlen=32))
@@ -230,7 +233,6 @@ class TrackData:
             self.velocity = (wrist - self.wrist).scaled(1.0 / elapsed)
         self.wrist = wrist
         self.last_seen_at = timestamp
-        self.missed_frames = 0
 
     def add_gesture(
         self,

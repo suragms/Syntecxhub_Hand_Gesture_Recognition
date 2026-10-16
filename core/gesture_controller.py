@@ -17,7 +17,6 @@ from .models import (
     RecognizedHand,
     TrackData,
 )
-from .performance_monitor import PerformanceMonitor
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,19 +24,20 @@ class ControllerConfig:
     """Track association and expiry settings for :class:`GestureController`.
 
     ``max_match_distance`` is measured in the raw coordinate system supplied by
-    the detector.  For the usual image-normalised coordinate convention, 0.15
-    is a conservative per-frame wrist displacement threshold.
+    the detector. For the usual image-normalised coordinate convention, 0.15
+    is a conservative per-frame wrist displacement threshold. Track expiry is
+    elapsed-time based so it is consistent across different camera frame rates.
     """
 
     max_match_distance: float = 0.15
-    max_missed_frames: int = 10
+    hand_lost_reset_seconds: float = 0.35
     match_handedness: bool = True
 
     def __post_init__(self) -> None:
         if not isfinite(self.max_match_distance) or self.max_match_distance <= 0.0:
             raise ValueError("max_match_distance must be a positive finite number.")
-        if self.max_missed_frames < 0:
-            raise ValueError("max_missed_frames cannot be negative.")
+        if not isfinite(self.hand_lost_reset_seconds) or self.hand_lost_reset_seconds <= 0.0:
+            raise ValueError("hand_lost_reset_seconds must be a positive finite number.")
 
 
 class GestureController:
@@ -55,13 +55,11 @@ class GestureController:
         landmark_processor: LandmarkProcessor | None = None,
         classifier: GestureClassifier | None = None,
         smoother: GestureSmoother | None = None,
-        performance_monitor: PerformanceMonitor | None = None,
         config: ControllerConfig | None = None,
     ) -> None:
         self.landmark_processor = landmark_processor or LandmarkProcessor()
         self.classifier = classifier or GestureClassifier()
         self.smoother = smoother or GestureSmoother()
-        self.performance_monitor = performance_monitor or PerformanceMonitor()
         self.config = config or ControllerConfig()
         self._tracks: Dict[int, TrackData] = {}
         self._next_track_id = 1
@@ -75,48 +73,46 @@ class GestureController:
     ) -> RecognitionFrame:
         """Process one detector result set and update hand tracks.
 
-        If ``timestamp`` is omitted, all observations must share one timestamp,
-        which becomes the frame timestamp.  A frame can be empty; it still ages
-        and expires missing tracks.  Timestamps must advance monotonically
-        across calls to avoid corrupting velocity and time-based smoothing.
+        If ``timestamp`` is omitted, all non-empty observations must share one
+        timestamp, which becomes the frame timestamp. Empty frames must provide
+        an explicit timestamp so elapsed hand-loss behavior remains meaningful.
+        Timestamps must advance monotonically across calls to avoid corrupting
+        velocity and time-based smoothing.
         """
         source = tuple(observations)
         frame_timestamp = self._resolve_timestamp(source, timestamp)
         self._validate_frame_timestamp(frame_timestamp)
 
-        with self.performance_monitor.measure():
-            processed = tuple(self.landmark_processor.process(item) for item in source)
-            assignments = self._assign_tracks(processed)
-            matched_ids = set(assignments.values())
-            self._age_unmatched_tracks(matched_ids)
+        self._expire_tracks(frame_timestamp)
+        processed = tuple(self.landmark_processor.process(item) for item in source)
+        assignments = self._assign_tracks(processed)
 
-            recognized: List[RecognizedHand] = []
-            for observation_index, landmarks in enumerate(processed):
-                track_id = assignments[observation_index]
-                track = self._tracks[track_id]
-                track.update_position(landmarks.wrist, frame_timestamp)
-                track.handedness = landmarks.handedness
-                prediction = self.classifier.classify(landmarks)
-                smoothed = self.smoother.update(track_id, prediction)
-                track.add_gesture(prediction, smoothed)
-                recognized.append(
-                    RecognizedHand(
-                        track_id=track_id,
-                        landmarks=landmarks,
-                        prediction=prediction,
-                        smoothed_gesture=smoothed,
-                        velocity=track.velocity,
-                        track_age_seconds=track.age_seconds,
-                    )
+        recognized: List[RecognizedHand] = []
+        for observation_index, landmarks in enumerate(processed):
+            track_id = assignments[observation_index]
+            track = self._tracks[track_id]
+            track.update_position(landmarks.wrist, frame_timestamp)
+            track.handedness = landmarks.handedness
+            prediction = self.classifier.classify(landmarks)
+            smoothed = self.smoother.update(track_id, prediction)
+            track.add_gesture(prediction, smoothed)
+            recognized.append(
+                RecognizedHand(
+                    track_id=track_id,
+                    landmarks=landmarks,
+                    prediction=prediction,
+                    smoothed_gesture=smoothed,
+                    velocity=track.velocity,
+                    track_age_seconds=track.age_seconds,
                 )
-
-            self._expire_tracks()
-            self._last_frame_timestamp = frame_timestamp
-            return RecognitionFrame(
-                timestamp=frame_timestamp,
-                hands=tuple(recognized),
-                active_track_ids=tuple(sorted(self._tracks)),
             )
+
+        self._last_frame_timestamp = frame_timestamp
+        return RecognitionFrame(
+            timestamp=frame_timestamp,
+            hands=tuple(recognized),
+            active_track_ids=tuple(sorted(self._tracks)),
+        )
 
     def tracks(self) -> Tuple[TrackData, ...]:
         """Return active track objects ordered by identifier.
@@ -132,7 +128,6 @@ class GestureController:
         self._next_track_id = 1
         self._last_frame_timestamp = None
         self.smoother.clear()
-        self.performance_monitor.reset()
 
     def _resolve_timestamp(
         self,
@@ -148,7 +143,7 @@ class GestureController:
         if not observations:
             if self._last_frame_timestamp is None:
                 raise ValueError("An empty first frame requires an explicit timestamp.")
-            return self._last_frame_timestamp
+            raise ValueError("An empty frame requires an explicit advancing timestamp.")
         timestamp = observations[0].timestamp
         if any(item.timestamp != timestamp for item in observations[1:]):
             raise ValueError("All observations in a frame must have the same timestamp.")
@@ -207,16 +202,12 @@ class GestureController:
         )
         return track_id
 
-    def _age_unmatched_tracks(self, matched_ids: set[int]) -> None:
-        for track_id, track in self._tracks.items():
-            if track_id not in matched_ids:
-                track.missed_frames += 1
-
-    def _expire_tracks(self) -> None:
+    def _expire_tracks(self, timestamp: float) -> None:
+        """Remove hands absent longer than the configured wall-clock interval."""
         stale_ids = [
             track_id
             for track_id, track in self._tracks.items()
-            if track.missed_frames > self.config.max_missed_frames
+            if timestamp - track.last_seen_at >= self.config.hand_lost_reset_seconds
         ]
         for track_id in stale_ids:
             self._tracks.pop(track_id)

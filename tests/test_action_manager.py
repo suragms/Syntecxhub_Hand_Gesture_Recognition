@@ -37,13 +37,34 @@ def test_volume_dispatch_is_simulated_and_bounded() -> None:
     assert volume.level == 1.0
 
 
-def test_cooldown_prevents_immediate_retrigger_after_rearm() -> None:
+def test_rearm_preserves_action_cooldown() -> None:
     media = SimulationMediaController()
     now = [0.0]
     manager = ActionManager(ActionRegistry(media_controller=media), enabled=True, cooldown=1.0, clock=lambda: now[0])
     assert manager.process_gesture(Gesture.THUMBS_UP).executed
-    manager.process_gesture(Gesture.FIST)
+    manager.rearm()
     now[0] = 0.5
     assert not manager.process_gesture(Gesture.THUMBS_UP).executed
     now[0] = 1.1
     assert manager.process_gesture(Gesture.THUMBS_UP).executed
+
+
+def test_independent_action_cooldowns_are_honored() -> None:
+    media = SimulationMediaController()
+    volume = SimulationVolumeController()
+    now = [0.0]
+    manager = ActionManager(
+        ActionRegistry(media_controller=media, volume_controller=volume),
+        enabled=True,
+        play_pause_cooldown=2.0,
+        volume_cooldown=0.5,
+        clock=lambda: now[0],
+    )
+    assert manager.process_gesture(Gesture.THUMBS_UP).executed
+    manager.rearm()
+    assert manager.process_gesture(Gesture.OPEN_PALM).executed
+    manager.rearm()
+    now[0] = 0.75
+    assert manager.process_gesture(Gesture.OPEN_PALM).executed
+    manager.rearm()
+    assert not manager.process_gesture(Gesture.THUMBS_UP).executed

@@ -8,7 +8,7 @@ The normal demonstration starts with action dispatch disabled:
 python scripts\webcam_demo.py
 ```
 
-This still shows real webcam frames, detected hands, landmarks, classification status, FPS, and intended action feedback. It does **not** send a media key or alter system volume.
+When the supported runtime and a camera are available, this shows webcam frames, detected hands, landmarks, classification status, capture-to-annotated-frame engine-pipeline FPS, and intended action feedback. It does **not** send a media key or alter system volume.
 
 ## Demo controls
 
@@ -67,8 +67,8 @@ The `A` key lets the person operating the demo enable/disable dispatch while the
 
 - A stabilized `THUMBS_UP` dispatches once, then cannot repeat while held.
 - A stabilized `OPEN_PALM` dispatches one bounded volume step, then cannot repeat while held.
-- Return to `FIST`, change gesture, or remove the hand long enough to rearm the next intentional action.
-- Cooldowns add a second timing guard.
+- Return to `FIST`, change gesture, or remove the hand for the configured absence interval to rearm the next intentional action.
+- Rearming never clears a previous action's cooldown; cooldowns remain a second timing guard.
 - When two hands are visible, both appear in the preview but only one deterministic primary track can be action-eligible.
 
 ## Use the desktop application

@@ -18,21 +18,27 @@ from ui.status_panel import StatusPanel
 
 @dataclass(frozen=True, slots=True)
 class _WorkerMessage:
+    run_id: int
     kind: str
     payload: Any
 
 
 class MainWindow:
-    """Keep capture/inference off Tk's event thread and update safely with ``after``."""
+    """Keep native capture in one worker and update Tk through ``after`` only."""
 
     def __init__(self, root: tk.Tk, config: AppConfig) -> None:
         self.root = root
         self.config = config
-        self.engine: GestureEngine | None = None
-        self._stop_event = threading.Event()
         self._worker: threading.Thread | None = None
-        self._results: queue.Queue[_WorkerMessage] = queue.Queue(maxsize=1)
+        self._stop_event: threading.Event | None = None
+        self._commands: queue.Queue[str] = queue.Queue()
+        self._frames: queue.Queue[_WorkerMessage] = queue.Queue(maxsize=1)
+        self._events: queue.Queue[_WorkerMessage] = queue.Queue()
+        self._active_run_id = 0
         self._running = False
+        self._stopping = False
+        self._closing = False
+        self._actions_enabled = False
 
         root.title("Syntecxhub Hand Gesture Recognition")
         root.minsize(720, 600)
@@ -67,25 +73,40 @@ class MainWindow:
         self.root.after(30, self._poll_results)
 
     def start(self) -> None:
-        if self._running:
+        """Start a new worker only after the prior native owner has stopped."""
+        if self._running or self._stopping or (self._worker and self._worker.is_alive()):
             return
-        self._stop_event.clear()
+        self._active_run_id += 1
+        run_id = self._active_run_id
+        stop_event = threading.Event()
+        self._stop_event = stop_event
         self._running = True
-        self._worker = threading.Thread(target=self._run_worker, name="gesture-camera", daemon=True)
+        self._stopping = False
+        self._actions_enabled = False
+        self.controls.set_actions_enabled(False)
+        self.controls.set_running(True)
+        self._worker = threading.Thread(
+            target=self._run_worker,
+            args=(run_id, stop_event),
+            name=f"gesture-camera-{run_id}",
+            daemon=True,
+        )
         self._worker.start()
 
     def stop(self) -> None:
-        self._stop_event.set()
-        self._running = False
-        if self.engine is not None:
-            self.engine.close()
-        self.camera_panel.clear()
+        """Signal the worker; only its thread closes camera/MediaPipe resources."""
+        if not self._running or self._stopping:
+            return
+        self._stopping = True
+        if self._stop_event is not None:
+            self._stop_event.set()
+        self.controls.set_running(True, stopping=True)
+        self.camera_panel.clear("Stopping camera preview…")
 
     def toggle_actions(self) -> None:
-        if self.engine is None:
-            messagebox.showinfo("Actions", "Start the camera before changing action controls.")
+        if not self._running or self._stopping:
             return
-        if not self.engine.actions_enabled:
+        if not self._actions_enabled:
             approved = messagebox.askyesno(
                 "Enable operating-system actions?",
                 "Real media and volume actions may affect the current computer. Continue?",
@@ -93,53 +114,99 @@ class MainWindow:
             )
             if not approved:
                 return
-        enabled = self.engine.toggle_actions()
-        self.controls.set_actions_enabled(enabled)
+        self.controls.actions_button.configure(state="disabled")
+        self._commands.put("toggle_actions")
 
-    def _run_worker(self) -> None:
+    def _run_worker(self, run_id: int, stop_event: threading.Event) -> None:
+        """Own one engine for the complete lifetime of a worker session."""
+        engine: GestureEngine | None = None
         try:
-            self.engine = GestureEngine(self.config, action_backend=self.config.actions.backend)
-            self.engine.start()
-            while not self._stop_event.is_set():
-                result = self.engine.process_next_frame()
-                self._put_latest(_WorkerMessage("frame", result))
+            engine = GestureEngine(self.config, action_backend=self.config.actions.backend)
+            engine.start()
+            self._put_event(_WorkerMessage(run_id, "action_state", engine.actions_enabled))
+            while not stop_event.is_set():
+                self._apply_commands(run_id, engine)
+                result = engine.process_next_frame()
+                self._put_latest_frame(_WorkerMessage(run_id, "frame", result))
         except Exception as error:
-            self._put_latest(_WorkerMessage("error", str(error)))
+            self._put_event(_WorkerMessage(run_id, "error", str(error)))
         finally:
-            if self.engine is not None:
-                self.engine.close()
-            self._put_latest(_WorkerMessage("stopped", None))
+            if engine is not None:
+                engine.close()
+            self._put_event(_WorkerMessage(run_id, "stopped", None))
 
-    def _put_latest(self, message: _WorkerMessage) -> None:
+    def _apply_commands(self, run_id: int, engine: GestureEngine) -> None:
+        while True:
+            try:
+                command = self._commands.get_nowait()
+            except queue.Empty:
+                return
+            if command == "toggle_actions":
+                self._put_event(
+                    _WorkerMessage(run_id, "action_state", engine.toggle_actions())
+                )
+
+    def _put_latest_frame(self, message: _WorkerMessage) -> None:
         try:
-            self._results.put_nowait(message)
+            self._frames.put_nowait(message)
         except queue.Full:
             try:
-                self._results.get_nowait()
+                self._frames.get_nowait()
             except queue.Empty:
                 pass
             try:
-                self._results.put_nowait(message)
+                self._frames.put_nowait(message)
             except queue.Full:
                 pass
 
+    def _put_event(self, message: _WorkerMessage) -> None:
+        self._events.put(message)
+
     def _poll_results(self) -> None:
+        self._process_events()
+        self._process_latest_frame()
+        if not self._closing:
+            self.root.after(30, self._poll_results)
+
+    def _process_events(self) -> None:
+        while True:
+            try:
+                message = self._events.get_nowait()
+            except queue.Empty:
+                return
+            if message.run_id != self._active_run_id:
+                continue
+            if message.kind == "action_state":
+                self._actions_enabled = bool(message.payload)
+                self.controls.set_actions_enabled(self._actions_enabled)
+                self.controls.set_running(self._running, stopping=self._stopping)
+            elif message.kind == "error":
+                self._running = False
+                self._stopping = True
+                self.controls.set_running(False, stopping=True)
+                self.camera_panel.clear("Camera error. See the message below.")
+                messagebox.showerror("Camera or recognition error", str(message.payload))
+            elif message.kind == "stopped":
+                self._running = False
+                self._stopping = False
+                self._stop_event = None
+                self._actions_enabled = False
+                self.controls.set_actions_enabled(False)
+                self.controls.set_running(False)
+                if self._closing:
+                    self.root.destroy()
+
+    def _process_latest_frame(self) -> None:
         latest: _WorkerMessage | None = None
         while True:
             try:
-                latest = self._results.get_nowait()
+                candidate = self._frames.get_nowait()
             except queue.Empty:
                 break
-        if latest is not None:
-            if latest.kind == "frame":
-                self._show_frame(latest.payload)
-            elif latest.kind == "error":
-                self._running = False
-                self.camera_panel.clear("Camera error. See the message below.")
-                messagebox.showerror("Camera or recognition error", str(latest.payload))
-            elif latest.kind == "stopped":
-                self._running = False
-        self.root.after(30, self._poll_results)
+            if candidate.run_id == self._active_run_id:
+                latest = candidate
+        if latest is not None and self._running and not self._stopping:
+            self._show_frame(latest.payload)
 
     def _show_frame(self, result: FrameResult) -> None:
         self.camera_panel.update_frame(result.frame)
@@ -149,12 +216,14 @@ class MainWindow:
             gesture = primary.smoothed_gesture.gesture.value.upper()
         else:
             hand, gesture = "None", "NO HAND DETECTED"
-        action = result.action_event.result.message if result.action_event else (self.engine.last_status if self.engine else "")
+        action = result.action_event.result.message if result.action_event else ""
         self.status_panel.update(hand=hand, gesture=gesture, action=action, fps=result.fps)
-        self.controls.set_actions_enabled(bool(self.engine and self.engine.actions_enabled))
+        self.controls.set_actions_enabled(self._actions_enabled)
 
     def close(self) -> None:
-        self.stop()
-        if self._worker is not None and self._worker.is_alive():
-            self._worker.join(timeout=1.5)
+        """Request orderly worker cleanup before destroying the Tk root."""
+        self._closing = True
+        if self._running:
+            self.stop()
+            return
         self.root.destroy()

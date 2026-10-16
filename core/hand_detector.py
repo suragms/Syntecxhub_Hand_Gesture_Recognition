@@ -79,14 +79,14 @@ class HandDetector:
         detected: list[HandObservation] = []
         for index, hand_landmarks in enumerate(landmarks_by_hand[: self.config.max_hands]):
             handedness = Handedness.UNKNOWN
-            handedness_score = 1.0
+            handedness_confidence: float | None = None
             if index < len(handedness_by_hand) and handedness_by_hand[index].classification:
                 label = handedness_by_hand[index].classification[0]
                 try:
                     handedness = Handedness(label.label.lower())
                 except ValueError:
                     handedness = Handedness.UNKNOWN
-                handedness_score = float(label.score)
+                handedness_confidence = float(label.score)
             points = tuple(
                 Point3D(float(point.x), float(point.y), float(point.z))
                 for point in hand_landmarks.landmark
@@ -99,7 +99,11 @@ class HandDetector:
                     landmarks=points,
                     timestamp=timestamp,
                     handedness=handedness,
-                    confidence=handedness_score,
+                    # Legacy MediaPipe Hands exposes handedness certainty, not a
+                    # landmark-quality score. Its accepted observations therefore
+                    # use neutral confidence; the label score remains metadata.
+                    confidence=1.0,
+                    handedness_confidence=handedness_confidence,
                 )
             )
         return detected

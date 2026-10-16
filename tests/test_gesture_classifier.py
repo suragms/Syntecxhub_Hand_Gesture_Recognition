@@ -28,6 +28,12 @@ def test_left_and_right_hands_use_same_geometry_rules() -> None:
     assert classify(open_palm_points(), handedness="right").gesture is Gesture.OPEN_PALM
 
 
+def test_low_observation_confidence_is_rejected() -> None:
+    processed = LandmarkProcessor().from_landmarks(open_palm_points(), timestamp=1.0, confidence=0.1)
+    result = GestureClassifier().classify(processed)
+    assert result.gesture is Gesture.UNKNOWN
+
+
 def test_unknown_partial_pose_is_not_forced_into_mandatory_gesture() -> None:
     points = list(open_palm_points())
     points[8] = points[6]

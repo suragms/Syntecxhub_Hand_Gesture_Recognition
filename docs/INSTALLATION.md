@@ -66,19 +66,27 @@ python scripts\webcam_demo.py --enable-actions --action-backend windows
 
 ## First-run checks
 
-```bash
-python scripts\test_camera.py
-```
+First run the hardware-safe checks:
 
 ```bash
-python scripts\test_gestures.py
+python -m compileall .
 ```
 
 ```bash
 python -m pytest -q
 ```
 
-Then launch the required demo:
+```bash
+python scripts\test_gestures.py
+```
+
+Then, only when you are ready to access the physical webcam, run:
+
+```bash
+python scripts\test_camera.py
+```
+
+Record real camera/gesture/FPS observations with [the hardware-validation checklist](HARDWARE_VALIDATION.md). Then launch the required demo:
 
 ```bash
 python scripts\webcam_demo.py

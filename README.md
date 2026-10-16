@@ -24,9 +24,9 @@ A local Windows desktop application that uses a real webcam, OpenCV, and MediaPi
 - MediaPipe Hands landmark extraction: 21 normalized points per detected hand.
 - Handedness labels and up-to-two-hand visualization.
 - Geometric, scale-normalized classification: `THUMBS_UP`, `FIST`, `OPEN_PALM`, and conservative `UNKNOWN` fallback.
-- Time-based smoothing instead of frame-count-only smoothing.
-- Measured processing FPS and visual status feedback.
-- Action cooldown, rearming, and one-primary-hand policy to prevent duplicate accidental actions.
+- Time-based smoothing and time-based hand-loss reset instead of frame-count-only behavior.
+- Capture-to-annotated-frame engine-pipeline FPS and visual status feedback.
+- Independent action cooldowns, rearming, and one-primary-hand policy to prevent duplicate accidental actions.
 - Default-disabled/simulation-first media and volume mappings.
 - Camera, detector, and OpenCV resource cleanup.
 - Unit tests that mock camera/action behavior and do not alter real media or volume.
@@ -223,11 +223,21 @@ The GUI keeps camera/MediaPipe work in a worker thread and updates Tk widgets on
 python -m pytest -q
 ```
 
-Tests are designed not to access a real camera or send a media key/volume command. See [testing guidance](docs/TESTING.md) for coverage and manual verification procedure.
+Tests are designed not to access a real camera or send a media key/volume command. See [testing guidance](docs/TESTING.md) and the [hardware validation record](docs/HARDWARE_VALIDATION.md) for coverage and manual verification procedure.
+
+### Most recent automated evidence
+
+| Check | Status | Actual result | Scope |
+| --- | --- | --- | --- |
+| `python -m compileall .` | **PASSED** | Completed with Python 3.14.4 | Syntax/bytecode compilation only. |
+| `python -m pytest -q` | **PASSED** | `27 passed` | Pure/mocked logic; no real camera or OS controls. |
+| CLI help and synthetic fixture diagnostic | **PASSED** | All three entry-point help commands returned; fixture reported `OPEN_PALM`. | Argument wiring and synthetic classifier path only. |
+| Live webcam / MediaPipe / GUI preview | **BLOCKED** | Active MediaPipe 0.10.35 has no `mp.solutions` legacy API under Python 3.14.4. | Requires documented Python 3.11 environment and manual evidence. |
+| Real Play/Pause and system-volume control | **NOT TESTED** | Deliberately not enabled. | Requires explicit operator opt-in after simulation validation. |
 
 ## Hardware verification status
 
-A local one-frame camera diagnostic on Windows successfully opened **camera index 0** through **DirectShow** and received a fresh **640×480** frame during development. Full live MediaPipe landmark/gesture verification was not completed in this environment because the active Python 3.14 installation exposed a newer Tasks-only MediaPipe surface rather than the Python 3.11 legacy Hands API pinned by this project. Recognition accuracy and live media/volume actions therefore remain manual validation items; this README does **not** claim they passed.
+This checkout's active Python 3.14.4 installation has MediaPipe 0.10.35 without the legacy `mp.solutions` Hands surface. The supported live-validation baseline remains a dedicated 64-bit Python 3.11 virtual environment with the pinned requirements. Camera, landmark accuracy, action behavior, real FPS, and resource release after a real session remain manual validation items; this README does **not** claim they passed.
 
 ## Troubleshooting
 
@@ -242,17 +252,19 @@ A local one-frame camera diagnostic on Windows successfully opened **camera inde
 
 ## Performance, limitations, and future improvements
 
-The default 640×480 configuration, one reused MediaPipe detector, and light geometric calculations target ordinary CPU-only laptops with at least 4 GB RAM. Actual performance depends on camera drivers, CPU, resolution, lighting, and the installed MediaPipe wheel—no unmeasured benchmark is claimed.
+The default 640×480 configuration, one reused MediaPipe detector, and light geometric calculations target ordinary CPU-only laptops with at least 4 GB RAM. The on-screen FPS is a rolling **capture-to-annotated-frame engine-pipeline** measurement: it includes camera read, mirror, MediaPipe inference, recognition, action decision, and overlay drawing. It excludes `cv2.imshow`, `cv2.waitKey`, Tk image conversion/event handling, and monitor refresh. Actual performance depends on camera drivers, CPU, resolution, lighting, and the installed MediaPipe wheel—no numerical benchmark has been collected in the current environment.
 
 Known limitations:
 
 - Geometric recognition is intentionally conservative and does not replace a trained sign-language model.
-- Extreme hand rotation, self-occlusion, poor lighting, and unusual camera angles can produce `UNKNOWN`.
-- Handedness is detector-supplied metadata and preview mirroring can affect a person's visual intuition.
-- Media controls are global OS requests; not every player responds to them.
-- The project supports Windows action backends, while recognition itself is largely cross-platform.
+- Extreme roll/rotation, foreshortening/depth variation, partial hands, self-occlusion, poor lighting, motion blur, and unusual camera angles can produce `UNKNOWN` or a false classification.
+- `THUMBS_UP` is defined relative to image-up, so strongly rotated hands are intentionally unreliable.
+- Handedness is detector-supplied metadata; a mirrored preview changes visual intuition but not geometric classification.
+- Two hands are rendered, but wrist-distance tracking can swap identities when hands cross, move rapidly, or are occluded. Only one primary track is action-eligible.
+- Camera/driver access remains environment-specific. Media controls are global OS requests, and not every player/audio endpoint responds.
+- The project supports Windows action backends, while the pure recognition core is largely cross-platform.
 
-Future work can add calibrated thresholds, optional MediaPipe Tasks migration with an official model asset, recorded test fixtures from real environments, per-action configurable cooldowns, and accessibility customization.
+Future work can add calibrated real-landmark fixtures, an official MediaPipe Tasks migration, robust multi-hand association, and accessibility customization.
 
 ## GitHub submission
 

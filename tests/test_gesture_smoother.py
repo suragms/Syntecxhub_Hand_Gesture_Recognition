@@ -26,6 +26,21 @@ def test_unknown_frame_does_not_immediately_remove_stability() -> None:
     assert result.stable
 
 
+def test_minimum_hold_requires_elapsed_winning_evidence() -> None:
+    smoother = GestureSmoother(
+        SmootherConfig(
+            window_seconds=1.0,
+            minimum_samples=3,
+            minimum_stability=0.7,
+            minimum_hold_seconds=0.25,
+        )
+    )
+    smoother.update(1, prediction(Gesture.OPEN_PALM, 0.0))
+    smoother.update(1, prediction(Gesture.OPEN_PALM, 0.1))
+    assert not smoother.update(1, prediction(Gesture.OPEN_PALM, 0.2)).stable
+    assert smoother.update(1, prediction(Gesture.OPEN_PALM, 0.3)).stable
+
+
 def test_forget_removes_history() -> None:
     smoother = GestureSmoother()
     smoother.update(1, prediction(Gesture.FIST, 0.0))

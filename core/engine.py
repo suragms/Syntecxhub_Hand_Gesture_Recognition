@@ -12,9 +12,12 @@ from actions.volume_controller import PycawVolumeController
 from config import AppConfig
 from core.action_manager import ActionEvent, ActionManager
 from core.camera import Camera
-from core.gesture_controller import GestureController
+from core.gesture_classifier import ClassifierConfig, GestureClassifier
+from core.gesture_controller import ControllerConfig, GestureController
+from core.gesture_smoother import GestureSmoother, SmootherConfig
 from core.hand_detector import HandDetector
 from core.models import Gesture, RecognitionFrame
+from core.performance_monitor import PerformanceMonitor
 from core.visualizer import Visualizer
 
 
@@ -36,18 +39,37 @@ class GestureEngine:
         self.config = config
         self.camera = Camera(config.camera)
         self.detector = HandDetector(config.detector)
-        self.controller = GestureController()
+        self.controller = self._build_controller()
         self.visualizer = Visualizer()
-        self.actions = ActionManager(
-            self._build_registry(action_backend or config.actions.backend),
-            enabled=config.actions.enabled_by_default,
-            cooldown=min(
-                config.actions.play_pause_cooldown_seconds,
-                config.actions.volume_cooldown_seconds,
+        self.actions = ActionManager.from_config(
+            config.actions,
+            registry=self._build_registry(action_backend or config.actions.backend),
+        )
+        self.performance_monitor = PerformanceMonitor()
+        self.last_status = "Actions are disabled."
+        self._no_hand_since: float | None = None
+        self._absence_rearmed = False
+        self._started = False
+
+    def _build_controller(self) -> GestureController:
+        """Translate validated application recognition settings to core components."""
+        recognition = self.config.recognition
+        return GestureController(
+            classifier=GestureClassifier(
+                ClassifierConfig(minimum_confidence=recognition.heuristic_confidence_threshold)
+            ),
+            smoother=GestureSmoother(
+                SmootherConfig(
+                    window_seconds=recognition.smoothing_window_seconds,
+                    minimum_stability=recognition.majority_ratio,
+                    minimum_hold_seconds=recognition.minimum_hold_seconds,
+                )
+            ),
+            config=ControllerConfig(
+                max_match_distance=recognition.association_distance,
+                hand_lost_reset_seconds=recognition.hand_lost_reset_seconds,
             ),
         )
-        self.last_status = "Actions are disabled."
-        self._started = False
 
     def _build_registry(self, backend: str) -> ActionRegistry:
         if backend == "pyautogui":
@@ -95,25 +117,52 @@ class GestureEngine:
         """Clear tracking, smoothing, cooldown, and rearming state."""
         self.controller.reset()
         self.actions.reset()
+        self.performance_monitor.reset()
+        self._no_hand_since = None
+        self._absence_rearmed = False
         self.last_status = "Recognition and action state reset."
 
     def process_next_frame(self, *, annotate: bool = True) -> FrameResult:
-        """Capture and process exactly one fresh frame."""
+        """Capture, recognize, and annotate one fresh frame.
+
+        The returned FPS measures the previous completed capture-to-annotated-frame
+        pipeline sample. Display/UI work owned by callers is intentionally excluded.
+        """
         if not self._started:
             raise RuntimeError("Gesture engine has not been started.")
-        frame = self.camera.read()
-        if self.config.camera.mirror:
-            import cv2
+        previous_metrics = self.performance_monitor.snapshot()
+        with self.performance_monitor.measure():
+            frame = self.camera.read()
+            if self.config.camera.mirror:
+                import cv2
 
-            frame = cv2.flip(frame, 1)
-        timestamp = monotonic()
-        observations = self.detector.process(frame, timestamp=timestamp)
-        recognition = self.controller.process_frame(observations, timestamp=timestamp)
-        event = self._dispatch_primary_stable_gesture(recognition)
-        metrics = self.controller.performance_monitor.snapshot()
-        if annotate:
-            self._annotate(frame, recognition, metrics.frames_per_second)
+                frame = cv2.flip(frame, 1)
+            timestamp = monotonic()
+            observations = self.detector.process(frame, timestamp=timestamp)
+            recognition = self.controller.process_frame(observations, timestamp=timestamp)
+            self._update_hand_absence(recognition, timestamp)
+            event = self._dispatch_primary_stable_gesture(recognition)
+            if annotate:
+                self._annotate(frame, recognition, previous_metrics.frames_per_second)
+        metrics = self.performance_monitor.snapshot()
         return FrameResult(frame, recognition, event, metrics.frames_per_second)
+
+    def _update_hand_absence(self, recognition: RecognitionFrame, timestamp: float) -> None:
+        """Rearm once after a sustained no-hand period without clearing cooldowns."""
+        if recognition.hands:
+            self._no_hand_since = None
+            self._absence_rearmed = False
+            return
+        if self._no_hand_since is None:
+            self._no_hand_since = timestamp
+            return
+        if (
+            not self._absence_rearmed
+            and timestamp - self._no_hand_since >= self.config.recognition.hand_lost_reset_seconds
+        ):
+            self.actions.rearm()
+            self._absence_rearmed = True
+            self.last_status = "No hand detected; gesture actions rearmed."
 
     def _dispatch_primary_stable_gesture(self, recognition: RecognitionFrame) -> ActionEvent | None:
         stable = [

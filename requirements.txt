@@ -2,8 +2,8 @@
 # Install core application and test dependencies with:
 #   python -m pip install -r requirements.txt
 # Use exactly one OpenCV distribution in an environment. Do not add contrib/headless wheels.
-# MediaPipe 0.10.30 retains the synchronous Hands API used by this release.
-mediapipe==0.10.30
+# MediaPipe 0.10.14 retains the synchronous solutions.Hands API used by this release.
+mediapipe==0.10.14
 # MediaPipe resolves its own compatible OpenCV/NumPy wheels; the constraints
 # below retain the preferred Python 3.11 baseline for a clean environment.
 numpy==1.26.4; python_version < "3.12"

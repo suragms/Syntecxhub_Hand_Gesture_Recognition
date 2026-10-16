@@ -18,6 +18,7 @@ class SmootherConfig:
     half_life_seconds: float = 0.25
     minimum_samples: int = 3
     minimum_stability: float = 0.60
+    minimum_hold_seconds: float = 0.0
     include_unknown: bool = False
 
     def __post_init__(self) -> None:
@@ -29,6 +30,10 @@ class SmootherConfig:
             raise ValueError("minimum_samples must be at least one.")
         if not 0.0 <= self.minimum_stability <= 1.0:
             raise ValueError("minimum_stability must be in [0, 1].")
+        if not isfinite(self.minimum_hold_seconds) or self.minimum_hold_seconds < 0.0:
+            raise ValueError("minimum_hold_seconds must be a non-negative finite number.")
+        if self.minimum_hold_seconds > self.window_seconds:
+            raise ValueError("minimum_hold_seconds cannot exceed window_seconds.")
 
 
 class GestureSmoother:
@@ -127,9 +132,20 @@ class GestureSmoother:
         # artificially perfect result when a single low-confidence vote exists.
         evidence = min(1.0, total_weight / max(1.0, self.config.minimum_samples * 0.5))
         confidence = stability * evidence
+        winning_timestamps = [
+            prediction.timestamp
+            for prediction in history
+            if prediction.gesture is gesture
+        ]
+        winning_hold_seconds = (
+            winning_timestamps[-1] - winning_timestamps[0]
+            if winning_timestamps
+            else 0.0
+        )
         stable = (
             considered >= self.config.minimum_samples
             and stability >= self.config.minimum_stability
+            and winning_hold_seconds >= self.config.minimum_hold_seconds
             and gesture is not Gesture.UNKNOWN
         )
         return SmoothedGesture(

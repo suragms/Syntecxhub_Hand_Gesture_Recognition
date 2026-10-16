@@ -40,7 +40,7 @@ class ClassifierConfig:
     thumb_extended_angle_degrees: float = 145.0
     pinch_distance: float = 0.45
     upright_dot_threshold: float = 0.28
-    minimum_confidence: float = 0.20
+    minimum_confidence: float = 0.70
 
     def __post_init__(self) -> None:
         if not 0.0 < self.finger_extended_angle_degrees < 180.0:
@@ -80,16 +80,32 @@ class GestureClassifier:
         points = landmarks.normalized
         states = self._finger_states(points)
         extended = {state.finger: state.extended for state in states}
-        confidence = landmarks.detector_confidence
+        detector_confidence = landmarks.detector_confidence
 
-        if confidence < self.config.minimum_confidence:
+        if detector_confidence < self.config.minimum_confidence:
             return self._prediction(
                 Gesture.UNKNOWN,
-                confidence,
+                detector_confidence,
                 landmarks.timestamp,
                 states,
-                "Detector confidence is below the classifier threshold.",
+                "Observation confidence is below the classifier threshold.",
             )
+
+        def accept(
+            gesture: Gesture,
+            evidence: float,
+            reason: str,
+        ) -> GesturePrediction:
+            confidence = self._bounded_confidence(detector_confidence * evidence)
+            if confidence < self.config.minimum_confidence:
+                return self._prediction(
+                    Gesture.UNKNOWN,
+                    confidence,
+                    landmarks.timestamp,
+                    states,
+                    f"{reason} Geometric evidence is below the classifier threshold.",
+                )
+            return self._prediction(gesture, confidence, landmarks.timestamp, states, reason)
 
         non_thumb = (Finger.INDEX, Finger.MIDDLE, Finger.RING, Finger.PINKY)
         extended_count = sum(extended[finger] for finger in non_thumb)
@@ -101,52 +117,44 @@ class GestureClassifier:
         pinch_distance = points[THUMB_TIP].distance_to(points[INDEX_TIP])
         if extended[Finger.INDEX] and pinch_distance <= self.config.pinch_distance:
             pinch_strength = 1.0 - pinch_distance / self.config.pinch_distance
-            return self._prediction(
+            return accept(
                 Gesture.PINCH,
-                confidence * (0.65 + 0.35 * pinch_strength),
-                landmarks.timestamp,
-                states,
+                0.65 + 0.35 * pinch_strength,
                 "Thumb and extended index tips are close in palm-normalised space.",
             )
 
         if extended_count == 4 and thumb_extended:
-            return self._prediction(Gesture.OPEN_PALM, confidence, landmarks.timestamp, states, "All fingers are extended.")
+            return accept(Gesture.OPEN_PALM, 1.0, "All fingers are extended.")
         if extended_count == 0 and not thumb_extended:
             compactness = self._mean_tip_distance_to_wrist(points)
-            return self._prediction(
+            return accept(
                 Gesture.FIST,
-                confidence * self._bounded_confidence(1.45 - compactness),
-                landmarks.timestamp,
-                states,
+                self._bounded_confidence(1.45 - compactness),
                 "All fingers are curled toward the palm.",
             )
         if extended[Finger.INDEX] and extended_count == 1 and not thumb_extended:
-            return self._prediction(Gesture.POINTING, confidence, landmarks.timestamp, states, "Only the index finger is extended.")
+            return accept(Gesture.POINTING, 1.0, "Only the index finger is extended.")
         if extended[Finger.INDEX] and extended[Finger.MIDDLE] and extended_count == 2 and not thumb_extended:
-            return self._prediction(Gesture.PEACE, confidence, landmarks.timestamp, states, "Index and middle fingers are extended.")
+            return accept(Gesture.PEACE, 1.0, "Index and middle fingers are extended.")
 
         if thumb_extended and extended_count == 0:
             orientation = self._thumb_vertical_orientation(points)
             if orientation >= self.config.upright_dot_threshold:
-                return self._prediction(
+                return accept(
                     Gesture.THUMBS_UP,
-                    confidence * self._orientation_confidence(orientation),
-                    landmarks.timestamp,
-                    states,
+                    self._orientation_confidence(orientation),
                     "Thumb points upward relative to the wrist.",
                 )
             if orientation <= -self.config.upright_dot_threshold:
-                return self._prediction(
+                return accept(
                     Gesture.THUMBS_DOWN,
-                    confidence * self._orientation_confidence(-orientation),
-                    landmarks.timestamp,
-                    states,
+                    self._orientation_confidence(-orientation),
                     "Thumb points downward relative to the wrist.",
                 )
 
         return self._prediction(
             Gesture.UNKNOWN,
-            confidence * 0.5,
+            detector_confidence * 0.5,
             landmarks.timestamp,
             states,
             "Finger configuration does not match a core gesture.",

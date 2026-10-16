@@ -65,6 +65,7 @@ class LandmarkProcessor:
             timestamp=observation.timestamp,
             handedness=observation.handedness,
             detector_confidence=observation.confidence,
+            handedness_confidence=observation.handedness_confidence,
             palm_size=palm_size,
             palm_center=palm_center,
         )

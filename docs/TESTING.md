@@ -6,13 +6,15 @@ The following commands were actually completed on Windows during implementation:
 
 | Check | Result | Scope |
 | --- | --- | --- |
-| `python -m pytest -q` | **18 passed** | Pure landmark/classifier/smoother/action logic plus mocked camera lifecycle; no real media or volume side effects. |
-| `python -m compileall -q .` | Passed | Source compilation check. |
-| `python scripts/test_gestures.py` | Passed | Synthetic open-palm fixture classified as `OPEN_PALM`. |
-| `python scripts/test_camera.py` | Passed | Camera index 0 opened through DirectShow and returned one 640×480 frame. |
-| CLI help checks | Passed | `webcam_demo.py`, `test_camera.py`, and `app.py` all displayed help. |
+| `python -m pytest -q` | **PASSED — 27 passed** | Pure/mocked landmark, classifier, smoothing, tracking, engine configuration, performance, action, detector-metadata, and camera lifecycle behavior; no real media or volume side effects. |
+| `python -m compileall .` | **PASSED** | Source compilation check with Python 3.14.4. |
+| `python scripts/test_gestures.py` | **PASSED** | Synthetic open-palm fixture classified as `OPEN_PALM`. |
+| CLI help checks | **PASSED** | `webcam_demo.py`, `test_camera.py`, and `app.py` all displayed help. |
+| `python scripts/test_camera.py` with hardware | **NOT TESTED this audit** | Not run because it would access a physical camera. |
+| Live demo / MediaPipe / GUI preview | **BLOCKED** | Active Python 3.14.4 has MediaPipe 0.10.35 without `mp.solutions`; use the documented Python 3.11 baseline. |
+| Real Play/Pause / volume action | **NOT TESTED** | No real action backend was enabled. |
 
-Full live MediaPipe hand-landmark/gesture verification was **not** completed in this development environment. The active Python 3.14 MediaPipe package exposed a Tasks-only API, while this application pins a Python 3.11 legacy-Hands baseline. Use the documented Python 3.11 virtual environment before completing the manual checklist below. No real Play/Pause or system-volume action was intentionally dispatched during automated testing.
+No real Play/Pause or system-volume action was intentionally dispatched during automated testing. Record future hardware evidence in [HARDWARE_VALIDATION.md](HARDWARE_VALIDATION.md).
 
 ## Important distinction: code tests vs. hardware verification
 
@@ -36,8 +38,12 @@ The pytest suite deliberately avoids physical hardware and external side effects
 - Scale-normalized input processing and handedness values.
 - Mandatory `OPEN_PALM`, `FIST`, and `THUMBS_UP` classifier fixtures.
 - Conservative `UNKNOWN` behavior for a partial/ambiguous gesture.
-- Time-based smoothing, flicker tolerance, and track-history cleanup.
-- Disabled actions, action mapping, neutral rearming, cooldown, and one-shot repeat prevention.
+- Time-based smoothing, elapsed-hold gating, flicker tolerance, and track-history cleanup.
+- Time-based track expiry and reset across variable empty-frame counts.
+- Recognition and action configuration wiring in the engine.
+- Detector handedness-label confidence separated from observation confidence.
+- Engine performance-monitor rolling FPS/reset behavior.
+- Disabled actions, action mapping, independent cooldowns, neutral/absence rearming, cooldown preservation, and one-shot repeat prevention.
 - Simulation volume clamping.
 - Camera-open failure, empty frame, and idempotent release via mocked OpenCV capture.
 
